@@ -13,9 +13,9 @@ using namespace scd ;
 
 const unsigned 
    num_items = 40 ,   // número de items
-	tam_buffer   = 10,   // tamaño del buffer
-   num_heb_productoras = 4,
-   num_heb_consumidoras = 4;
+   tam_buffer   = 10,   // tamaño del buffer
+   num_heb_productoras = 5,
+   num_heb_consumidoras = 5;
 
 unsigned  
    cont_prod[num_items] = {0}, // contadores de verificación: para cada dato, número de veces que se ha producido.
@@ -23,14 +23,14 @@ unsigned
    siguiente_dato       = 0;  // siguiente dato a producir en 'producir_dato' (solo se usa ahí)
 
 int buffer[tam_buffer];
-int primera_ocupada = 0, primera_libre = 0;
+int primera_libre = 0;
 
 int vec_productoras[num_heb_productoras];
 
 Semaphore ocupadas(0);
 Semaphore libres(tam_buffer);
-Semaphore producir(1);
-Semaphore consumir(1);
+Semaphore mod_stack(1);
+
 //**********************************************************************
 // funciones comunes a las dos soluciones (fifo y lifo)
 //----------------------------------------------------------------------
@@ -49,7 +49,7 @@ unsigned producir_dato(unsigned i)
 
 void consumir_dato(unsigned dato, unsigned i)
 {
-   assert(dato < num_items);
+   assert( dato < num_items );
    cont_cons[dato] ++ ;
    this_thread::sleep_for( chrono::milliseconds( aleatorio<20,100>() ));
    cout << "Hebra: " << i << " consume el dato: " << dato << endl;
@@ -62,11 +62,11 @@ void  funcion_hebra_productora(unsigned id_hebra)
    {
       int dato = producir_dato(id_hebra);
       sem_wait(libres);
-      sem_wait(producir);
+      sem_wait(mod_stack);
       buffer[primera_libre] = dato;
       cout << "Introduzco dato: " << dato  << " en posicion: " << primera_libre << endl << flush;
-      primera_libre = (primera_libre + 1) % tam_buffer;
-      sem_signal(producir);
+      primera_libre++;
+      sem_signal(mod_stack);
       sem_signal(ocupadas);
    }
    cout << "Fin de hebra productora numero " << id_hebra << endl;
@@ -80,11 +80,11 @@ void funcion_hebra_consumidora(unsigned id_hebra)
    {
       int dato;
       sem_wait(ocupadas);
-      sem_wait(consumir);
-      dato = buffer[primera_ocupada];
-      cout << "Extraigo dato: " << dato << " en posicion: " << primera_ocupada << endl << flush;
-      primera_ocupada = (primera_ocupada + 1) % tam_buffer;
-      sem_signal(consumir);
+      sem_wait(mod_stack);
+      dato = buffer[primera_libre-1];
+      cout << "Extraigo dato: " << dato << " en posicion: " << primera_libre-1 << endl << flush;
+      primera_libre--;
+      sem_signal(mod_stack);
       sem_signal(libres);
       consumir_dato(dato, id_hebra) ;
    }
