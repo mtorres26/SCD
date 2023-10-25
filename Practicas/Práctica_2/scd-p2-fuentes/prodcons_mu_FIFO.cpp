@@ -3,13 +3,13 @@
 // Sistemas concurrentes y Distribuidos.
 // Practica 2. Introducción a los monitores en C++11.
 //
-// Archivo: prodcons_mu_LIFO.cpp
+// Archivo: prodcons_mu_FIFO.cpp
 //
-// Compilar: ~$ g++ -std=c++11 -pthread -I. -o prodcons_mu_LIFO prodcons_mu_LIFO.cpp scd.cpp
+// Compilar: ~$ g++ -std=c++11 -pthread -I. -o prodcons_mu_FIFO prodcons_mu_FIFO.cpp scd.cpp
 //
 // Ejemplo de un monitor en C++11 con semántica SU, para el problema
 // del productor/consumidor, con productor y consumidor únicos.
-// Opcion LIFO
+// Opcion FIFO
 //
 // Historial:
 // Creado el 30 Sept de 2022. (adaptado de prodcons2_su.cpp)
@@ -28,7 +28,7 @@ using namespace std ;
 using namespace scd ;
 
 constexpr int
-   num_items = 1500 ;   // número de items a producir/consumir
+   num_items = 1500;   // número de items a producir/consumir
 
 const unsigned
    num_hebras_productoras = 5,
@@ -72,13 +72,13 @@ void consumir_dato( unsigned valor_consumir , unsigned id_hebra)
 {
    if ( num_items <= valor_consumir )
    {
-      cout << " valor a consumir === " << valor_consumir << ", num_items == " << num_items << endl ;
+      cout << " valor a consumir === " << valor_consumir << ", num_items == " << num_items << endl << flush;
       assert( valor_consumir < num_items );
    }
    cont_cons[valor_consumir] ++ ;
    this_thread::sleep_for( chrono::milliseconds( aleatorio<min_ms,max_ms>() ));
    mtx.lock();
-   cout << "                  hebra consumidora numero " << id_hebra << ", consume: " << valor_consumir << endl ;
+   cout << "                  hebra consumidora numero " << id_hebra << ", consume: " << valor_consumir << endl << flush ;
    mtx.unlock();
 }
 //----------------------------------------------------------------------
@@ -115,7 +115,8 @@ class ProdConsMu : public HoareMonitor
    num_celdas_total = 10;   //   núm. de entradas del buffer
  int                        // variables permanentes
    buffer[num_celdas_total],//   buffer de tamaño fijo, con los datos
-   primera_libre ;          //   indice de celda de la próxima inserción ( == número de celdas ocupadas)
+   primera_libre = 0,
+   primera_ocupada = 0;          //   indice de celda de la próxima inserción ( == número de celdas ocupadas)
 
  CondVar                    // colas condicion:
    ocupadas,                //  cola donde espera el consumidor (n>0)
@@ -139,16 +140,15 @@ ProdConsMu::ProdConsMu(  )
 
 int ProdConsMu::leer(  )
 {
-   // esperar bloqueado hasta que 0 < primera_libre
-   if ( primera_libre == 0 )
+   cout << "Primera Ocupada vale: " << primera_ocupada << endl << flush;
+   if ( primera_ocupada == primera_libre)
       ocupadas.wait();
 
-   //cout << "leer: ocup == " << primera_libre << ", total == " << num_celdas_total << endl ;
-   assert( 0 < primera_libre  );
-
    // hacer la operación de lectura, actualizando estado del monitor
-   const int valor = buffer[--primera_libre] ;
+   const int valor = buffer[primera_ocupada];
+   primera_ocupada = (primera_ocupada + 1) % num_celdas_total;
    
+
    // señalar al productor que hay un hueco libre, por si está esperando
    libres.signal();
 
@@ -159,15 +159,14 @@ int ProdConsMu::leer(  )
 
 void ProdConsMu::escribir( int valor )
 {
-   // esperar bloqueado hasta que primera_libre < num_celdas_total
-   if ( primera_libre == num_celdas_total )
+   cout << "Primera Libre vale: " << primera_libre << endl << flush;
+   if ( (primera_libre +1) % num_celdas_total == primera_ocupada )
       libres.wait();
 
-   //cout << "escribir: ocup == " << primera_libre << ", total == " << num_celdas_total << endl ;
-   assert( primera_libre < num_celdas_total );
-
    // hacer la operación de inserción, actualizando estado del monitor
-   buffer[primera_libre++] = valor ;
+   buffer[primera_libre] = valor ;
+   primera_libre = (primera_libre + 1) % num_celdas_total;
+   
 
    // señalar al consumidor que ya hay una celda ocupada (por si esta esperando)
    ocupadas.signal();
@@ -198,7 +197,7 @@ void funcion_hebra_consumidora( MRef<ProdConsMu>  monitor , unsigned id_hebra)
 int main()
 {
    cout << "--------------------------------------------------------------------" << endl
-        << "Problema del productor-consumidor multiples (Monitor SU, buffer LIFO). " << endl
+        << "Problema del productor-consumidor multiples (Monitor SU, buffer FIFO). " << endl
         << "--------------------------------------------------------------------" << endl
         << flush ;
 
