@@ -68,20 +68,24 @@ int producirIngrediente()
 class Estanco : public HoareMonitor
 {
  private:
- static const int              // constantes ('static' ya que no dependen de la instancia)
-   num_ingredientes = 3;       // núm. de entradas del buffer
+ static const int                   // constantes ('static' ya que no dependen de la instancia)
+   num_ingredientes = 3;            // núm. de entradas del buffer
 
- CondVar                       // colas condicion:
-   ingr_disp[num_ingredientes],                      // cola donde espera el fumador
-   mostr_vacio;                // cola donde espera el estanquero
+  bool mostr_vacio;                 // variables permanentes
+  int ultimoIngrediente;
+ 
+ CondVar                            // colas condicion:
+   ingr_disp[num_ingredientes],     // cola donde espera el fumador
+   estanquero;                      // cola donde espera el estanquero
 
- public:                       // constructor y métodos públicos
-   Estanco() ;                 // constructor
-   // Funciones que llama el estanquero
+ public:                            // constructor y métodos públicos
+   Estanco() ;                      // constructor
+
+   // Funciones que llama el estanquero.
    void ponerIngrediente(int ingrediente);
    void esperarRecogidaIngrediente();
 
-   // Funcion que llaman los fumadores
+   // Funcion que llaman los fumadores.
    void obtenerIngrediente(int ingrediente);
 } ;
 
@@ -90,34 +94,54 @@ Estanco::Estanco()
     for(int i = 0; i < num_ingredientes; i++){
         ingr_disp[i] = newCondVar();
     }
-    mostr_vacio = newCondVar();
+    estanquero = newCondVar();
+    mostr_vacio = true;
+    ultimoIngrediente = -1;
 }
 
+//--------------------------------------------------------------------
+// Funciones del estanquero
 
 void Estanco::ponerIngrediente(int ingrediente)
 {
-    cout << "Puesto el ingrediente numero:	" << ingrediente << "	en el mostrador." << endl;
-    ingr_disp[ingrediente].signal();
+    // Si hay algun ingrediente sin coger por los fumadores, entra en cola.
+    if(!mostr_vacio){
+        estanquero.wait();
+    }
+    cout << "Estanquero pone el ingrediente numero:	" << ingrediente << "	en el mostrador." << endl;
+    ultimoIngrediente = ingrediente;
+    mostr_vacio = false;
+    ingr_disp[ingrediente].signal(); // Señala al fumador que este en cola.
 }
 
 void Estanco::esperarRecogidaIngrediente()
 {
-    cout << "Soy estanquero y me espero a que retiren ingrediente del mostrador." << endl;
-    mostr_vacio.wait();
+    // Si hay algun ingrediente sin coger por los fumadores, entra en cola. Sino, vuelve a producir otro ingrediente (itera).
+    if(!mostr_vacio){
+        cout << "Estanquero espera a que recojan el ingrediente. " << endl;
+        estanquero.wait();
+    }
 }
+
+// ----------------------------------------------------------------------------
+// Funcion de los fumadores
 
 void Estanco::obtenerIngrediente(int ingrediente)
 {
-    cout << "Soy fumador y espero el ingrediente numero:	" << ingrediente << endl;
-    ingr_disp[ingrediente].wait();
-    mostr_vacio.signal();
-    cout << "Soy fumador y acabo de retirar el ingrediente numero:     " << ingrediente << endl; 
+    // Si el ingrediente disponible vuelve a ser el del mismo fumador, 
+    // este pasa a retirar su ingrediente.
+    if(mostr_vacio || ultimoIngrediente != ingrediente){ 
+        cout << "Fumador espera el ingrediente numero:	" << ingrediente << endl;
+        ingr_disp[ingrediente].wait();
+    }
+    mostr_vacio = true;
+    ultimoIngrediente = -1; // Esta variable solo la actualiza a un valor correcto el estanquero (ya no hay ultimo ingrediente). 
+    cout << "Fumador acaba de retirar el ingrediente numero:     " << ingrediente << endl;
+    estanquero.signal(); // Señalamos al estanquero para que salga de la cola y produzca otro ingrediente.
 }
-
 
 //----------------------------------------------------------------------
 // función que ejecuta la hebra del estanquero
-
 void funcion_hebra_estanquero( MRef<Estanco> estanco)
 {
 	int ingrediente;
@@ -131,7 +155,6 @@ void funcion_hebra_estanquero( MRef<Estanco> estanco)
 
 //----------------------------------------------------------------------
 // función que ejecuta la hebra del fumador
-// varios fumadores pueden fumar simultaneamente
 void  funcion_hebra_fumador(  MRef<Estanco> estanco, int num_fumador )
 {
    while( true )
@@ -145,7 +168,7 @@ void  funcion_hebra_fumador(  MRef<Estanco> estanco, int num_fumador )
 
 int main()
 {		
-    // crear monitor  ('monitor' es una referencia al mismo, de tipo MRef<...>)
+    // crear monitor  ('estanco' es una referencia al mismo, de tipo MRef<...>)
     MRef<Estanco> estanco = Create<Estanco>() ;
 
 	thread array_heb_fumadores[num_fumadores];
