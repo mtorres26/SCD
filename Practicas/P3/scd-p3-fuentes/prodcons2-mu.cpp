@@ -11,7 +11,10 @@
 //
 // Historial:
 // Actualizado a C++11 en Septiembre de 2017
+//
 // -----------------------------------------------------------------------------
+
+// Autor: Miguel Torres Alonso
 
 #include <iostream>
 #include <thread> // this_thread::sleep_for
@@ -24,10 +27,9 @@ using namespace std::this_thread;
 using namespace std::chrono;
 
 const int num_productores = 4, num_consumidores = 5;
+const int etiq_productor = 1, etiq_consumidor = 2;
 
 const int
-    id_productores[num_productores],
-    id_consumidores[num_consumidores],
     id_buffer = num_productores,
     num_procesos_esperado = 10,
     num_items = 20,
@@ -46,19 +48,21 @@ int aleatorio()
    static uniform_int_distribution<int> distribucion_uniforme(min, max);
    return distribucion_uniforme(generador);
 }
+
 // ---------------------------------------------------------------------
 // producir produce los numeros en secuencia (1,2,3,....)
 // y lleva espera aleatorio
 int producir(int rank)
 {
    const int rango_valores = num_items / num_productores;
-   static int contador = rank * rango_valores;
+   static int contador = rank * rango_valores - 1; // -1 porque lo incrementamos ahora
    sleep_for(milliseconds(aleatorio<10, 100>()));
    contador++;
-   cout << "Productor   " << rank << "   ha producido valor   " << contador << endl
+   cout << "Productor    " << rank << "   ha producido valor   " << contador << endl
         << flush;
    return contador;
 }
+
 // ---------------------------------------------------------------------
 
 void funcion_productor(int rank)
@@ -67,19 +71,21 @@ void funcion_productor(int rank)
    {
       // producir valor
       int valor_prod = producir(rank);
+
       // enviar valor
-      cout << "Productor   " << rank << "   va a enviar valor   " << valor_prod << endl
+      cout << "Productor    " << rank << "   va a enviar  valor   " << valor_prod << endl
            << flush;
-      MPI_Send(&valor_prod, 1, MPI_INT, id_buffer, 0, MPI_COMM_WORLD);
+      MPI_Send(&valor_prod, 1, MPI_INT, id_buffer, etiq_productor, MPI_COMM_WORLD);
    }
 }
+
 // ---------------------------------------------------------------------
 
-void consumir(int valor_cons)
+void consumir(int valor_cons, int rank)
 {
    // espera bloqueada
    sleep_for(milliseconds(aleatorio<110, 200>()));
-   cout << "Consumidor ha consumido valor " << valor_cons << endl
+   cout << "Consumidor   " << rank << "   ha consumido valor   " << valor_cons << endl
         << flush;
 }
 // ---------------------------------------------------------------------
@@ -90,13 +96,15 @@ void funcion_consumidor(int rank)
        valor_rec = 1;
    MPI_Status estado;
 
-   for (unsigned int i = 0; i < num_items; i++)
+   for (unsigned int i = 0; i < num_items / num_consumidores; i++)
    {
-      MPI_Ssend(&peticion, 1, MPI_INT, id_buffer, 0, MPI_COMM_WORLD);
-      MPI_Recv(&valor_rec, 1, MPI_INT, id_buffer, 0, MPI_COMM_WORLD, &estado);
-      cout << "Consumidor ha recibido valor " << valor_rec << endl
+      // Enviamos peticion con etiq_consumidor para que el buffer sepa que es un consumidor
+      MPI_Send(&peticion, 1, MPI_INT, id_buffer, etiq_consumidor, MPI_COMM_WORLD);
+      MPI_Recv(&valor_rec, 1, MPI_INT, id_buffer, etiq_consumidor, MPI_COMM_WORLD, &estado);
+
+      cout << "Consumidor   " << rank << "   ha recibido  valor   " << valor_rec << endl
            << flush;
-      consumir(valor_rec);
+      consumir(valor_rec, rank);
    }
 }
 // ---------------------------------------------------------------------
@@ -111,7 +119,7 @@ void funcion_buffer()
 
    MPI_Status estado; // metadatos del mensaje recibido
 
-   const int etiq_aceptable = 0, etiq_productor = 1, etiq_consumidor = 2;
+   int etiq_aceptable;
 
    for (unsigned int i = 0; i < num_items * 2; i++)
    {
@@ -125,7 +133,6 @@ void funcion_buffer()
          etiq_aceptable = MPI_ANY_TAG;            // $~~~$ cualquiera
 
       // 2. recibir un mensaje del emisor o emisores aceptables
-
       MPI_Recv(&valor, 1, MPI_INT, MPI_ANY_SOURCE, etiq_aceptable, MPI_COMM_WORLD, &estado);
 
       // 3. procesar el mensaje recibido
@@ -136,15 +143,17 @@ void funcion_buffer()
          buffer[primera_libre] = valor;
          primera_libre = (primera_libre + 1) % tam_vector;
          num_celdas_ocupadas++;
-         cout << "Buffer ha recibido valor " << valor << endl;
+         cout << "Buffer ha recibido            valor   " << valor << endl;
          break;
 
       case etiq_consumidor: // si ha sido el consumidor: extraer y enviarle
          valor = buffer[primera_ocupada];
          primera_ocupada = (primera_ocupada + 1) % tam_vector;
          num_celdas_ocupadas--;
-         cout << "Buffer va a enviar valor " << valor << endl;
-         MPI_Ssend(&valor, 1, MPI_INT, MPI_ANY_SOURCE, etiq_consumidor, MPI_COMM_WORLD);
+         // Vamos a enviar al mismo consumidor que ha solicitado
+         int consum_aceptable = estado.MPI_SOURCE;
+         cout << "Buffer va a enviar            valor   " << valor << endl;
+         MPI_Send(&valor, 1, MPI_INT, consum_aceptable, etiq_consumidor, MPI_COMM_WORLD);
          break;
       }
    }
@@ -154,7 +163,8 @@ void funcion_buffer()
 
 int main(int argc, char *argv[])
 {
-   int id_propio, num_procesos_actual;
+
+   int id_propio, id_rol, num_procesos_actual;
 
    // inicializar MPI, leer identif. de proceso y número de procesos
    MPI_Init(&argc, &argv);
@@ -163,26 +173,22 @@ int main(int argc, char *argv[])
 
    if (num_procesos_esperado == num_procesos_actual)
    {
-      if (id_propio == 0) // El proceso 0 asigna los identificadores de proceso a los vectores de id de cada rol
+      if (id_propio < num_productores)
       {
-         for (int i = 0; i < num_productores; i++)
-         {
-            id_productores[i] = i;
-         }
-         for (int i = 0; i < num_consumidores; i++)
-         {
-            id_consumidores[i] = i;
-         }
+         id_rol = id_propio; // Los productores tienen el mismo id de rol que de comm
       }
-
+      else if (id_propio > num_productores) // mayor estricto porque el id_propio == num_prod es el del buffer
+      {
+         id_rol = id_propio - num_productores - 1;
+      }
       // ejecutar la operación apropiada a 'id_propio'
       if (id_propio < num_productores)
-         funcion_productor(id_propio); // id_propio es igual al numero de orden del rol productor
+         funcion_productor(id_rol);
       else if (id_propio == id_buffer)
          funcion_buffer();
       else
-         funcion_consumidor(id_propio - num_productores - 1); // Los que tengan id mayor que el buffer son consumidores respetando
-                                                              // el if(num_procesos_esperado == num_procesos_actual)
+         funcion_consumidor(id_rol); // Los que tengan id mayor que el buffer son consumidores respetando
+                                     // el if(num_procesos_esperado == num_procesos_actual)
    }
    else
    {
